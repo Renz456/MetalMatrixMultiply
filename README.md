@@ -61,7 +61,7 @@ First, the function adds the `kernel` keyword, which declares that the function 
 - A *public GPU function*. Public functions are the only functions that your app can see. Public functions also can't be called by other shader functions.
 - A *compute function* (also known as a compute kernel), which performs a parallel calculation using a grid of threads.
 
-See [Using a Render Pipeline to Render Primitives](https://developer.apple.com/documentation/metal/using_a_render_pipeline_to_render_primitives) to learn the other function keywords used to declare public graphics functions.
+See [Using a Render Pipeline to Render Primitives](https://developer.apple.com/documentation/metal/using-a-render-pipeline-to-render-primitives) to learn the other function keywords used to declare public graphics functions.
 
 The `add_arrays` function declares three of its arguments with the `device` keyword, which says that these pointers are in the `device` address space.
 MSL defines several disjoint address spaces for memory.
@@ -245,7 +245,7 @@ Some methods set state information, like the pipeline state object (PSO) or the 
 After you make those state changes, you encode a command to execute the pipeline.
 The encoder writes all of the state changes and command parameters into the command buffer.
 
-![Command Encoding](Documentation/command_encoding.png)
+![Command Encoding](Documentation/performing-calculations-on-a-gpu.png)
 
 ## Set Pipeline State and Argument Data
 
@@ -368,14 +368,14 @@ Because the calculations are only used to illustrate the process of creating a M
 ```
 
 [MTLDevice]: https://developer.apple.com/documentation/metal/mtldevice
-[MTLCreateSystemDefaultDevice]: https://developer.apple.com/documentation/metal/1433401-mtlcreatesystemdefaultdevice
+[MTLCreateSystemDefaultDevice]: https://developer.apple.com/documentation/metal/mtlcreatesystemdefaultdevice()
 [MTLResource]: https://developer.apple.com/documentation/metal/mtlresource
 [MTLBuffer]: https://developer.apple.com/documentation/metal/mtlbuffer
 [MTLResourceStorageModeShared]: https://developer.apple.com/documentation/metal/mtlresourceoptions/mtlresourcestoragemodeshared
 [MTLComputePipelineState]: https://developer.apple.com/documentation/metal/mtlcomputepipelinestate
-[maxTotalThreadsPerThreadgroup]: https://developer.apple.com/documentation/metal/mtlcomputepipelinestate/1414927-maxtotalthreadsperthreadgroup
-[status]: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443048-status
-[addCompletedHandler]: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1442997-addcompletedhandler
+[maxTotalThreadsPerThreadgroup]: https://developer.apple.com/documentation/metal/mtlcomputepipelinestate/maxtotalthreadsperthreadgroup
+[status]: https://developer.apple.com/documentation/metal/mtlcommandbuffer/status
+[addCompletedHandler]: https://developer.apple.com/documentation/metal/mtlcommandbuffer/addcompletedhandler(_:)
 [MTLLibrary]: https://developer.apple.com/documentation/metal/mtllibrary
 [MTLFunction]: https://developer.apple.com/documentation/metal/mtlfunction
 [HelloTriangle]: https://developer.apple.com/documentation/metal
