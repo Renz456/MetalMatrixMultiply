@@ -110,8 +110,8 @@ A class to manage all of the Metal objects this app creates.
     // Define tile sizes
     const int BM = 64;  // Block size for M dimension
     const int BN = 64;  // Block size for N dimension
-    const int TM = 8;   // Number of results per thread in M dimension
-    const int TN = 8;   // Number of results per thread in N dimension
+    const int TM = 16;   // Number of results per thread in M dimension
+    const int TN = 16;   // Number of results per thread in N dimension
     
     // Calculate grid and threadgroup size
     MTLSize gridSize = MTLSizeMake(((_N + BN-1)/BN), ((_M+BM-1)/BM), 1);
