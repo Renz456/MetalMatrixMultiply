@@ -6,6 +6,7 @@ A class to manage all of the Metal objects this app creates.
 */
 
 #import "MetalAdder.h"
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 @implementation MetalAdder {
     id<MTLDevice> _mDevice;
@@ -96,6 +97,14 @@ A class to manage all of the Metal objects this app creates.
 }
 
 - (void)sendComputeCommand {
+    // Run our custom implementation
+    [self runCustomMatrixMultiply];
+    
+    // Run Apple's built-in implementation
+    [self runAppleMatrixMultiply];
+}
+
+- (void)runCustomMatrixMultiply {
     id<MTLCommandBuffer> commandBuffer = [_mCommandQueue commandBuffer];
     id<MTLComputeCommandEncoder> computeEncoder = [commandBuffer computeCommandEncoder];
     
@@ -117,31 +126,84 @@ A class to manage all of the Metal objects this app creates.
     MTLSize gridSize = MTLSizeMake(((_N + BN-1)/BN), ((_M+BM-1)/BM), 1);
     MTLSize threadgroupSize = MTLSizeMake((BM * BN) / (TM * TN), 1, 1);
     
-    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", (int)gridSize.width, (int)gridSize.height, (int)threadgroupSize.width, (int)threadgroupSize.height);
-    
-    [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
-    [computeEncoder endEncoding];
+    NSLog(@"Custom implementation - Grid size: %dx%d, Threadgroup size: %dx%d", 
+          (int)gridSize.width, (int)gridSize.height, 
+          (int)threadgroupSize.width, (int)threadgroupSize.height);
     
     // Start timing
     NSDate *startTime = [NSDate date];
+    
+    [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
+    [computeEncoder endEncoding];
     
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
     
     // End timing and calculate duration
     NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
-    NSLog(@"GPU computation took %.4f seconds", timeElapsed);
+    NSLog(@"Custom matrix multiplication took %.4f seconds", timeElapsed);
     
-    [self verifyResults];
+    // Create a copy of the result for verification
+    id<MTLBuffer> customResult = [_mDevice newBufferWithLength:_mBufferResult.length options:MTLResourceStorageModeShared];
+    memcpy(customResult.contents, _mBufferResult.contents, _mBufferResult.length);
+    
+    // Verify results
+    [self verifyResults:customResult];
 }
 
-- (void)verifyResults {
+- (void)runAppleMatrixMultiply {
+    // Create MPS matrices
+    MPSMatrixDescriptor *matrixADesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_M columns:_K rowBytes:_K * sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *matrixBDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_K columns:_N rowBytes:_N * sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *matrixCDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_M columns:_N rowBytes:_N * sizeof(float) dataType:MPSDataTypeFloat32];
+    
+    MPSMatrix *matrixA = [[MPSMatrix alloc] initWithBuffer:_mBufferA descriptor:matrixADesc];
+    MPSMatrix *matrixB = [[MPSMatrix alloc] initWithBuffer:_mBufferB descriptor:matrixBDesc];
+    MPSMatrix *matrixC = [[MPSMatrix alloc] initWithDevice:_mDevice descriptor:matrixCDesc];
+    
+    // Create the matrix multiplication kernel
+    MPSMatrixMultiplication *matrixMultiply = [[MPSMatrixMultiplication alloc] initWithDevice:_mDevice 
+                                                                                transposeLeft:NO 
+                                                                               transposeRight:NO 
+                                                                                resultRows:_M 
+                                                                             resultColumns:_N 
+                                                                             interiorColumns:_K 
+                                                                                    alpha:1.0 
+                                                                                     beta:0.0];
+    
+    // Create a command buffer
+    id<MTLCommandBuffer> commandBuffer = [_mCommandQueue commandBuffer];
+    
+    // Start timing
+    NSDate *startTime = [NSDate date];
+    
+    // Encode the matrix multiplication
+    [matrixMultiply encodeToCommandBuffer:commandBuffer 
+                            leftMatrix:matrixA 
+                           rightMatrix:matrixB 
+                          resultMatrix:matrixC];
+    
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    
+    // End timing and calculate duration
+    NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
+    NSLog(@"Apple matrix multiplication took %.4f seconds", timeElapsed);
+    
+    // Get the result buffer
+    id<MTLBuffer> appleResult = [matrixC data];
+    
+    // Verify results
+    [self verifyResults:appleResult];
+}
+
+- (void)verifyResults:(id<MTLBuffer>)resultBuffer {
     float* a = (float*)_mBufferA.contents;
     float* b = (float*)_mBufferB.contents;
-    float* result = (float*)_mBufferResult.contents;
+    float* result = (float*)resultBuffer.contents;
     
     // Verify a few random elements
-     int verificationErrors = 0;
+    int verificationErrors = 0;
     // for (int i = 0; i < 10; i++) {
     //     int row = rand() % _M;
     //     int col = rand() % _N;
