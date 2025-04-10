@@ -107,17 +107,22 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferN offset:0 atIndex:4];
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
+    // Define tile size for shared memory
+    int TILE_SIZE = 16;
+    // Define number of results each thread computes
+    int RESULTS_PER_THREAD = 1;
+
     // Calculate grid and threadgroup size
     // Adjust grid size to account for multiple results per thread
-    MTLSize gridSize = MTLSizeMake(_M, (_N + 3) / 4, 1); // Ceiling division by RESULTS_PER_THREAD (4)
+    MTLSize gridSize = MTLSizeMake(_M, (_N + RESULTS_PER_THREAD - 1) / RESULTS_PER_THREAD, 1); // Ceiling division by RESULTS_PER_THREAD (4)
     NSUInteger maxThreadsPerThreadgroup = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
     
     // Use a 16x16 threadgroup size for optimal memory coalescing
     // This ensures each thread in a threadgroup works on the same row of A
-    NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, 16 * 16); // 16x16 = 256 threads per group
-    MTLSize threadgroupSize = MTLSizeMake(16, 16, 1); // Fixed 16x16 threadgroup size to match TILE_SIZE
+    NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, TILE_SIZE * TILE_SIZE); // TILE_SIZExTILE_SIZE = 256 threads per group
+    MTLSize threadgroupSize = MTLSizeMake(TILE_SIZE, TILE_SIZE, 1); // Fixed TILE_SIZExTILE_SIZE threadgroup size to match TILE_SIZE
     
-    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, (_N + 3) / 4, (int)threadgroupSize.width, (int)threadgroupSize.height);
+    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, (_N + RESULTS_PER_THREAD - 1) / RESULTS_PER_THREAD, (int)threadgroupSize.width, (int)threadgroupSize.height);
     
     [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
     [computeEncoder endEncoding];

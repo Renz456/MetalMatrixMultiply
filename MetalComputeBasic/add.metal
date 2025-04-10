@@ -11,7 +11,7 @@ using namespace metal;
 // Define tile size for shared memory
 constant int TILE_SIZE = 16;
 // Define number of results each thread computes
-constant int RESULTS_PER_THREAD = 4;
+constant int RESULTS_PER_THREAD = 1;
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
 /// using shared memory for better performance with optimized memory coalescing.
@@ -56,16 +56,24 @@ kernel void add_arrays(device const float* A,
         int globalColB = globalCol + innerColB;
         
         // Load data into shared memory
-        if (globalColA < K) {
-            As[innerRowA][innerColA] = A[globalRowA * K + globalColA];
+        if (bkIdx + tid.y < K) {
+            // Load from matrix A: row gid.x, column bkIdx + tid.y
+            // This ensures each thread in a threadgroup loads from the same row of A
+            As[tid.x][tid.y] = A[gid.x * K + (bkIdx + tid.y)];
+
+            // Load from matrix B: row bkIdx + tid.x, column gid.y
+            // This ensures each thread in a threadgroup loads from the same column of B
+            // Bs[tid.x][tid.y] = B[(bkIdx + tid.x) * N + gid.y];
         } else {
-            As[innerRowA][innerColA] = 0.0f;
+            // Pad with zeros if we're beyond the matrix dimensions
+            As[tid.x][tid.y] = 0.0f;
+            // Bs[tid.x][tid.y] = 0.0f;
         }
         
         // Load from matrix B for each result this thread will compute
         for (int r = 0; r < RESULTS_PER_THREAD; r++) {
             if (globalRowB < K && (globalColB + r) < N) {
-                Bs[innerRowB][innerColB] = B[globalRowB * N + (globalColB + r)];
+                Bs[innerRowB][innerColB] = B[(bkIdx + tid.x + r) * N + gid.y];
             } else {
                 Bs[innerRowB][innerColB] = 0.0f;
             }
