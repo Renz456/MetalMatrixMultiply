@@ -47,9 +47,9 @@ kernel void add_arrays(device const float* A,
     const uint threadCol = tid.x % (BN / TN);
     const uint threadRow = tid.x / (BN / TN);
     
-    // Create shared memory tiles
-    threadgroup float As[BM * BK];
-    threadgroup float Bs[BK * BN];
+    // Create double-buffered shared memory tiles
+    threadgroup float As[2][BM * BK];  // Double buffer for A
+    threadgroup float Bs[2][BK * BN];  // Double buffer for B
     
     // Move pointers to the start of the current block
     A += cRow * BM * K;
@@ -69,9 +69,41 @@ kernel void add_arrays(device const float* A,
     float regM[TM] = {0.0};
     float regN[TN] = {0.0};
     
+    // Initialize current buffer index
+    uint currentBuffer = 0;
+    uint nextBuffer = 1;
+    
+    // Load first tile into shared memory
+    for (uint loadOffset = 0; loadOffset < BM; loadOffset += strideA * VEC_SIZE) {
+        if ((innerRowA + loadOffset) < BM && innerColA < K) {
+            // Cast pointer to float2* and load 2 floats at once from global memory
+            device const float2* vecPtr = reinterpret_cast<device const float2*>(&A[(innerRowA + loadOffset) * K + innerColA]);
+            float2 vecA = *vecPtr;
+            
+            // Cast pointer to float2* and store 2 floats at once to shared memory
+            threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&As[currentBuffer][(innerRowA + loadOffset) * BK + innerColA]);
+            *smemPtr = vecA;
+        }
+    }
+    
+    for (uint loadOffset = 0; loadOffset < BK; loadOffset += strideB * VEC_SIZE) {
+        if ((innerRowB + loadOffset) < BK && (threadCol * TN + innerColB) < BN) {
+            // Cast pointer to float2* and load 2 floats at once from global memory
+            device const float2* vecPtr = reinterpret_cast<device const float2*>(&B[(innerRowB + loadOffset) * N + innerColB]);
+            float2 vecB = *vecPtr;
+            
+            // Cast pointer to float2* and store 2 floats at once to shared memory
+            threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&Bs[currentBuffer][(innerRowB + loadOffset) * BN + innerColB]);
+            *smemPtr = vecB;
+        }
+    }
+    
+    // Synchronize threads after initial load
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    
     // Loop over block tiles
-    for (uint bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Load data into shared memory with vectorized loads
+    for (uint bkIdx = BK; bkIdx < K; bkIdx += BK) {
+        // Start loading next tile while computing current tile
         for (uint loadOffset = 0; loadOffset < BM; loadOffset += strideA * VEC_SIZE) {
             if ((innerRowA + loadOffset) < BM && (bkIdx + innerColA) < K) {
                 // Cast pointer to float2* and load 2 floats at once from global memory
@@ -79,7 +111,7 @@ kernel void add_arrays(device const float* A,
                 float2 vecA = *vecPtr;
                 
                 // Cast pointer to float2* and store 2 floats at once to shared memory
-                threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&As[(innerRowA + loadOffset) * BK + innerColA]);
+                threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&As[nextBuffer][(innerRowA + loadOffset) * BK + innerColA]);
                 *smemPtr = vecA;
             }
         }
@@ -91,25 +123,18 @@ kernel void add_arrays(device const float* A,
                 float2 vecB = *vecPtr;
                 
                 // Cast pointer to float2* and store 2 floats at once to shared memory
-                threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&Bs[(innerRowB + loadOffset) * BN + innerColB]);
+                threadgroup float2* smemPtr = reinterpret_cast<threadgroup float2*>(&Bs[nextBuffer][(innerRowB + loadOffset) * BN + innerColB]);
                 *smemPtr = vecB;
             }
         }
         
-        // Synchronize threads
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        
-        // Advance pointers
-        A += BK;
-        B += BK * N;
-        
-        // Calculate dot products using register caches
+        // Calculate dot products using current buffer
         for (uint dotIdx = 0; dotIdx < BK; ++dotIdx) {
             // Load into registers with vectorized loads from shared memory
             for (uint i = 0; i < TM; i += VEC_SIZE) {
                 if ((threadRow * TM + i) < BM) {
                     // Cast pointer to float2* and load 2 floats at once from shared memory
-                    threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&As[(threadRow * TM + i) * BK + dotIdx]);
+                    threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&As[currentBuffer][(threadRow * TM + i) * BK + dotIdx]);
                     float2 vecM = *smemPtr;
                     regM[i] = vecM.x;
                     regM[i + 1] = vecM.y;
@@ -122,7 +147,7 @@ kernel void add_arrays(device const float* A,
             for (uint i = 0; i < TN; i += VEC_SIZE) {
                 if ((threadCol * TN + i) < BN) {
                     // Cast pointer to float2* and load 2 floats at once from shared memory
-                    threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&Bs[dotIdx * BN + threadCol * TN + i]);
+                    threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&Bs[currentBuffer][dotIdx * BN + threadCol * TN + i]);
                     float2 vecN = *smemPtr;
                     regN[i] = vecN.x;
                     regN[i + 1] = vecN.y;
@@ -140,8 +165,53 @@ kernel void add_arrays(device const float* A,
             }
         }
         
-        // Synchronize before loading next tile
+        // Synchronize before switching buffers
         threadgroup_barrier(mem_flags::mem_threadgroup);
+        
+        // Swap buffers
+        currentBuffer = nextBuffer;
+        nextBuffer = 1 - currentBuffer;
+        
+        // Advance pointers
+        A += BK;
+        B += BK * N;
+    }
+    
+    // Process the last tile using current buffer
+    for (uint dotIdx = 0; dotIdx < BK; ++dotIdx) {
+        // Load into registers with vectorized loads from shared memory
+        for (uint i = 0; i < TM; i += VEC_SIZE) {
+            if ((threadRow * TM + i) < BM) {
+                // Cast pointer to float2* and load 2 floats at once from shared memory
+                threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&As[currentBuffer][(threadRow * TM + i) * BK + dotIdx]);
+                float2 vecM = *smemPtr;
+                regM[i] = vecM.x;
+                regM[i + 1] = vecM.y;
+            } else {
+                regM[i] = 0.0f;
+                regM[i + 1] = 0.0f;
+            }
+        }
+        
+        for (uint i = 0; i < TN; i += VEC_SIZE) {
+            if ((threadCol * TN + i) < BN) {
+                // Cast pointer to float2* and load 2 floats at once from shared memory
+                threadgroup const float2* smemPtr = reinterpret_cast<threadgroup const float2*>(&Bs[currentBuffer][dotIdx * BN + threadCol * TN + i]);
+                float2 vecN = *smemPtr;
+                regN[i] = vecN.x;
+                regN[i + 1] = vecN.y;
+            } else {
+                regN[i] = 0.0f;
+                regN[i + 1] = 0.0f;
+            }
+        }
+        
+        // Compute results using register caches
+        for (uint resIdxM = 0; resIdxM < TM; ++resIdxM) {
+            for (uint resIdxN = 0; resIdxN < TN; ++resIdxN) {
+                threadResults[resIdxM * TN + resIdxN] += regM[resIdxM] * regN[resIdxN];
+            }
+        }
     }
     
     // Write results back to global memory with vectorized stores
