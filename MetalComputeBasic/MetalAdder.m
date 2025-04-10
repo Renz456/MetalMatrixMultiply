@@ -110,6 +110,9 @@ A class to manage all of the Metal objects this app creates.
     // Calculate grid and threadgroup size
     MTLSize gridSize = MTLSizeMake(_M, _N, 1);
     NSUInteger maxThreadsPerThreadgroup = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
+    
+    // Use a 16x16 threadgroup size for optimal memory coalescing
+    // This ensures each thread in a threadgroup works on the same row of A
     NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, 16 * 16); // 16x16 = 256 threads per group
     MTLSize threadgroupSize = MTLSizeMake(16, 16, 1); // Fixed 16x16 threadgroup size to match TILE_SIZE
     

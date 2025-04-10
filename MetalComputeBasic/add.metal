@@ -12,7 +12,7 @@ using namespace metal;
 constant int TILE_SIZE = 16;
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
-/// using shared memory for better performance.
+/// using shared memory for better performance with optimized memory coalescing.
 kernel void add_arrays(device const float* A,
                       device const float* B,
                       device float* result,
@@ -41,9 +41,11 @@ kernel void add_arrays(device const float* A,
         // Load data into shared memory
         if (tileStartK + tid.y < K) {
             // Load from matrix A: row gid.x, column tileStartK + tid.y
+            // This ensures each thread in a threadgroup loads from the same row of A
             As[tid.x][tid.y] = A[gid.x * K + (tileStartK + tid.y)];
             
             // Load from matrix B: row tileStartK + tid.x, column gid.y
+            // This ensures each thread in a threadgroup loads from the same column of B
             Bs[tid.x][tid.y] = B[(tileStartK + tid.x) * N + gid.y];
         } else {
             // Pad with zeros if we're beyond the matrix dimensions
@@ -55,6 +57,7 @@ kernel void add_arrays(device const float* A,
         threadgroup_barrier(mem_flags::mem_threadgroup);
         
         // Compute partial dot product for this tile
+        // Each thread computes the dot product of its row from A and column from B
         for (int i = 0; i < TILE_SIZE; i++) {
             sum += As[tid.x][i] * Bs[i][tid.y];
         }
