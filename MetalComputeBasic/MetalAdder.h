@@ -1,5 +1,5 @@
 /*
-See the LICENSE.txt file for this sample’s licensing information.
+See the LICENSE.txt file for this sample's licensing information.
 
 Abstract:
 A class to manage all of the Metal objects this app creates.
@@ -11,9 +11,9 @@ A class to manage all of the Metal objects this app creates.
 NS_ASSUME_NONNULL_BEGIN
 
 @interface MetalAdder : NSObject
-- (instancetype) initWithDevice: (id<MTLDevice>) device;
-- (void) prepareData;
-- (void) sendComputeCommand;
+- (instancetype)initWithDevice:(id<MTLDevice>)device;
+- (void)prepareDataWithSizeM:(int)M sizeN:(int)N sizeK:(int)K;
+- (void)sendComputeCommand;
 @end
 
 NS_ASSUME_NONNULL_END

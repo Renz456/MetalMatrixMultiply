@@ -1,8 +1,8 @@
 /*
-See the LICENSE.txt file for this sample’s licensing information.
+See the LICENSE.txt file for this sample's licensing information.
 
 Abstract:
-An app that performs a simple calculation on a GPU.
+An app that performs matrix multiplication on a GPU.
 */
 
 #import <Foundation/Foundation.h>
@@ -11,33 +11,51 @@ An app that performs a simple calculation on a GPU.
 
 // This is the C version of the function that the sample
 // implements in Metal Shading Language.
-void add_arrays(const float* inA,
-                const float* inB,
-                float* result,
-                int length)
+void matrix_multiply_cpu(const float* matrixA,
+                        const float* matrixB,
+                        float* result,
+                        int M, int N, int K)
 {
-    for (int index = 0; index < length ; index++)
-    {
-        result[index] = inA[index] + inB[index];
+    for (int row = 0; row < M; row++) {
+        for (int col = 0; col < N; col++) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; k++) {
+                sum += matrixA[row * K + k] * matrixB[k * N + col];
+            }
+            result[row * N + col] = sum;
+        }
     }
 }
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
-        
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-
+        if (device == nil) {
+            NSLog(@"Failed to create Metal device");
+            return 1;
+        }
+        
+        NSLog(@"Using device: %@", device.name);
+        
         // Create the custom object used to encapsulate the Metal code.
-        // Initializes objects to communicate with the GPU.
         MetalAdder* adder = [[MetalAdder alloc] initWithDevice:device];
+        if (adder == nil) {
+            NSLog(@"Failed to create MetalAdder object");
+            return 1;
+        }
+        
+        // Set matrix dimensions (M x K) * (K x N) = (M x N)
+        const int M = 4096;  // rows of A
+        const int K = 4096;  // cols of A, rows of B
+        const int N = 4096;  // cols of B
         
         // Create buffers to hold data
-        [adder prepareData];
+        [adder prepareDataWithSizeM:M sizeN:N sizeK:K];
         
         // Send a command to the GPU to perform the calculation.
         [adder sendComputeCommand];
-
-        NSLog(@"Execution finished");
+        
+        NSLog(@"Matrix multiplication completed");
     }
     return 0;
 }

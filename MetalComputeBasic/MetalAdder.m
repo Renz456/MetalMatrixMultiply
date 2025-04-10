@@ -1,5 +1,5 @@
 /*
-See the LICENSE.txt file for this sample’s licensing information.
+See the LICENSE.txt file for this sample's licensing information.
 
 Abstract:
 A class to manage all of the Metal objects this app creates.
@@ -7,157 +7,167 @@ A class to manage all of the Metal objects this app creates.
 
 #import "MetalAdder.h"
 
-// The number of floats in each array, and the size of the arrays in bytes.
-const unsigned int arrayLength = 1 << 24;
-const unsigned int bufferSize = arrayLength * sizeof(float);
-
-@implementation MetalAdder
-{
+@implementation MetalAdder {
     id<MTLDevice> _mDevice;
-
-    // The compute pipeline generated from the compute kernel in the .metal shader file.
     id<MTLComputePipelineState> _mAddFunctionPSO;
-
-    // The command queue used to pass commands to the device.
     id<MTLCommandQueue> _mCommandQueue;
-
-    // Buffers to hold data.
+    
     id<MTLBuffer> _mBufferA;
     id<MTLBuffer> _mBufferB;
     id<MTLBuffer> _mBufferResult;
-
+    id<MTLBuffer> _mBufferM;
+    id<MTLBuffer> _mBufferN;
+    id<MTLBuffer> _mBufferK;
+    
+    int _M;
+    int _N;
+    int _K;
 }
 
-- (instancetype) initWithDevice: (id<MTLDevice>) device
-{
+- (instancetype)initWithDevice:(id<MTLDevice>)device {
     self = [super init];
-    if (self)
-    {
+    if (self) {
         _mDevice = device;
-
+        
         NSError* error = nil;
-
-        // Load the shader files with a .metal file extension in the project
-
+        
+        // Load the shader files
         id<MTLLibrary> defaultLibrary = [_mDevice newDefaultLibrary];
-        if (defaultLibrary == nil)
-        {
+        if (defaultLibrary == nil) {
             NSLog(@"Failed to find the default library.");
             return nil;
         }
-
+        
         id<MTLFunction> addFunction = [defaultLibrary newFunctionWithName:@"add_arrays"];
-        if (addFunction == nil)
-        {
+        if (addFunction == nil) {
             NSLog(@"Failed to find the adder function.");
             return nil;
         }
-
-        // Create a compute pipeline state object.
-        _mAddFunctionPSO = [_mDevice newComputePipelineStateWithFunction: addFunction error:&error];
-        if (_mAddFunctionPSO == nil)
-        {
-            //  If the Metal API validation is enabled, you can find out more information about what
-            //  went wrong.  (Metal API validation is enabled by default when a debug build is run
-            //  from Xcode)
-            NSLog(@"Failed to created pipeline state object, error %@.", error);
+        
+        // Create a compute pipeline state object
+        _mAddFunctionPSO = [_mDevice newComputePipelineStateWithFunction:addFunction error:&error];
+        if (_mAddFunctionPSO == nil) {
+            NSLog(@"Failed to create pipeline state object, error %@.", error);
             return nil;
         }
-
+        
         _mCommandQueue = [_mDevice newCommandQueue];
-        if (_mCommandQueue == nil)
-        {
-            NSLog(@"Failed to find the command queue.");
+        if (_mCommandQueue == nil) {
+            NSLog(@"Failed to create command queue.");
             return nil;
         }
     }
-
     return self;
 }
 
-- (void) prepareData
-{
-    // Allocate three buffers to hold our initial data and the result.
-    _mBufferA = [_mDevice newBufferWithLength:bufferSize options:MTLResourceStorageModeShared];
-    _mBufferB = [_mDevice newBufferWithLength:bufferSize options:MTLResourceStorageModeShared];
-    _mBufferResult = [_mDevice newBufferWithLength:bufferSize options:MTLResourceStorageModeShared];
-
-    [self generateRandomFloatData:_mBufferA];
-    [self generateRandomFloatData:_mBufferB];
+- (void)prepareDataWithSizeM:(int)M sizeN:(int)N sizeK:(int)K {
+    _M = M;
+    _N = N;
+    _K = K;
+    
+    // Calculate buffer sizes
+    size_t sizeA = M * K * sizeof(float);
+    size_t sizeB = K * N * sizeof(float);
+    size_t sizeResult = M * N * sizeof(float);
+    
+    // Create buffers
+    _mBufferA = [_mDevice newBufferWithLength:sizeA options:MTLResourceStorageModeShared];
+    _mBufferB = [_mDevice newBufferWithLength:sizeB options:MTLResourceStorageModeShared];
+    _mBufferResult = [_mDevice newBufferWithLength:sizeResult options:MTLResourceStorageModeShared];
+    _mBufferM = [_mDevice newBufferWithBytes:&M length:sizeof(int) options:MTLResourceStorageModeShared];
+    _mBufferN = [_mDevice newBufferWithBytes:&N length:sizeof(int) options:MTLResourceStorageModeShared];
+    _mBufferK = [_mDevice newBufferWithBytes:&K length:sizeof(int) options:MTLResourceStorageModeShared];
+    
+    // Initialize matrices with random data
+    [self generateRandomData:_mBufferA size:M * K];
+    [self generateRandomData:_mBufferB size:K * N];
+    
+    // Print some sample values for debugging
+    float* a = (float*)_mBufferA.contents;
+    float* b = (float*)_mBufferB.contents;
+    NSLog(@"Sample values - A[0,0]=%.6f, B[0,0]=%.6f", a[0], b[0]);
 }
 
-- (void) sendComputeCommand
-{
-    // Create a command buffer to hold commands.
+- (void)generateRandomData:(id<MTLBuffer>)buffer size:(int)size {
+    float* dataPtr = (float*)buffer.contents;
+    for (int i = 0; i < size; i++) {
+        dataPtr[i] = (float)rand() / (float)RAND_MAX;
+    }
+}
+
+- (void)sendComputeCommand {
     id<MTLCommandBuffer> commandBuffer = [_mCommandQueue commandBuffer];
-    assert(commandBuffer != nil);
-
-    // Start a compute pass.
     id<MTLComputeCommandEncoder> computeEncoder = [commandBuffer computeCommandEncoder];
-    assert(computeEncoder != nil);
-
-    [self encodeAddCommand:computeEncoder];
-
-    // End the compute pass.
-    [computeEncoder endEncoding];
-
-    // Execute the command.
-    [commandBuffer commit];
-
-    // Normally, you want to do other work in your app while the GPU is running,
-    // but in this example, the code simply blocks until the calculation is complete.
-    [commandBuffer waitUntilCompleted];
-
-    [self verifyResults];
-}
-
-- (void)encodeAddCommand:(id<MTLComputeCommandEncoder>)computeEncoder {
-
-    // Encode the pipeline state object and its parameters.
+    
     [computeEncoder setComputePipelineState:_mAddFunctionPSO];
     [computeEncoder setBuffer:_mBufferA offset:0 atIndex:0];
     [computeEncoder setBuffer:_mBufferB offset:0 atIndex:1];
     [computeEncoder setBuffer:_mBufferResult offset:0 atIndex:2];
-
-    MTLSize gridSize = MTLSizeMake(arrayLength, 1, 1);
-
-    // Calculate a threadgroup size.
-    NSUInteger threadGroupSize = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
-    if (threadGroupSize > arrayLength)
-    {
-        threadGroupSize = arrayLength;
-    }
-    MTLSize threadgroupSize = MTLSizeMake(threadGroupSize, 1, 1);
-
-    // Encode the compute command.
-    [computeEncoder dispatchThreads:gridSize
-              threadsPerThreadgroup:threadgroupSize];
+    [computeEncoder setBuffer:_mBufferM offset:0 atIndex:3];
+    [computeEncoder setBuffer:_mBufferN offset:0 atIndex:4];
+    [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
+    
+    // Calculate grid and threadgroup size
+    MTLSize gridSize = MTLSizeMake(_M, _N, 1);
+    NSUInteger maxThreadsPerThreadgroup = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
+    NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, 16 * 16); // 16x16 = 256 threads per group
+    MTLSize threadgroupSize = MTLSizeMake(16, 16, 1); // Fixed 16x16 threadgroup size to match TILE_SIZE
+    
+    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, _N, (int)threadgroupSize.width, (int)threadgroupSize.height);
+    
+    [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
+    [computeEncoder endEncoding];
+    
+    // Start timing
+    NSDate *startTime = [NSDate date];
+    
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    
+    // End timing and calculate duration
+    NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
+    NSLog(@"GPU computation took %.4f seconds", timeElapsed);
+    
+    [self verifyResults];
 }
 
-- (void) generateRandomFloatData: (id<MTLBuffer>) buffer
-{
-    float* dataPtr = buffer.contents;
-
-    for (unsigned long index = 0; index < arrayLength; index++)
-    {
-        dataPtr[index] = (float)rand()/(float)(RAND_MAX);
-    }
-}
-- (void) verifyResults
-{
-    float* a = _mBufferA.contents;
-    float* b = _mBufferB.contents;
-    float* result = _mBufferResult.contents;
-
-    for (unsigned long index = 0; index < arrayLength; index++)
-    {
-        if (result[index] != (a[index] + b[index]))
-        {
-            printf("Compute ERROR: index=%lu result=%g vs %g=a+b\n",
-                   index, result[index], a[index] + b[index]);
-            assert(result[index] == (a[index] + b[index]));
+- (void)verifyResults {
+    float* a = (float*)_mBufferA.contents;
+    float* b = (float*)_mBufferB.contents;
+    float* result = (float*)_mBufferResult.contents;
+    
+    // Verify a few random elements
+    int verificationErrors = 0;
+    for (int i = 0; i < 10; i++) {
+        int row = rand() % _M;
+        int col = rand() % _N;
+        float expected = 0.0f;
+        
+        for (int k = 0; k < _K; k++) {
+            expected += a[row * _K + k] * b[k * _N + col];
+        }
+        
+        float actual = result[row * _N + col];
+        if (fabs(actual - expected) > 0.0001f) {
+            NSLog(@"Verification failed at [%d,%d]: expected %.6f, got %.6f", row, col, expected, actual);
+            verificationErrors++;
+            
+            // Print the contributing values for debugging
+            NSLog(@"Contributing values for [%d,%d]:", row, col);
+            for (int k = 0; k < MIN(5, _K); k++) {
+                NSLog(@"  A[%d,%d]=%.6f * B[%d,%d]=%.6f = %.6f", 
+                      row, k, a[row * _K + k], 
+                      k, col, b[k * _N + col],
+                      a[row * _K + k] * b[k * _N + col]);
+            }
         }
     }
-    printf("Compute results as expected\n");
+    
+    if (verificationErrors == 0) {
+        NSLog(@"Verification passed - all checked elements match expected values");
+    } else {
+        NSLog(@"Verification failed - %d errors found", verificationErrors);
+    }
 }
+
 @end
