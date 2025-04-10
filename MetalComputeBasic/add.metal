@@ -10,9 +10,12 @@ using namespace metal;
 
 // Define tile size for shared memory
 constant int TILE_SIZE = 16;
+// Define number of results each thread computes
+constant int RESULTS_PER_THREAD = 4;
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
 /// using shared memory for better performance with optimized memory coalescing.
+/// Each thread computes multiple results stored in registers.
 kernel void add_arrays(device const float* A,
                       device const float* B,
                       device float* result,
@@ -23,7 +26,7 @@ kernel void add_arrays(device const float* A,
                       uint2 tid [[thread_position_in_threadgroup]])
 {
     // Check if we're within bounds
-    if (gid.x >= M || gid.y >= N) {
+    if (gid.x >= M || gid.y * RESULTS_PER_THREAD >= N) {
         return;
     }
     
@@ -31,41 +34,66 @@ kernel void add_arrays(device const float* A,
     threadgroup float As[TILE_SIZE][TILE_SIZE];
     threadgroup float Bs[TILE_SIZE][TILE_SIZE];
     
-    float sum = 0.0f;
+    // Allocate thread-local cache for results in register file
+    float threadResults[RESULTS_PER_THREAD] = {0.0};
     
-    // Loop over tiles
-    for (int tile = 0; tile < (K + TILE_SIZE - 1) / TILE_SIZE; tile++) {
-        // Calculate global indices for this tile
-        int tileStartK = tile * TILE_SIZE;
+    // Calculate global indices
+    int globalRow = gid.x;
+    int globalCol = gid.y * RESULTS_PER_THREAD;
+    
+    // Loop over block tiles
+    for (int bkIdx = 0; bkIdx < K; bkIdx += TILE_SIZE) {
+        // Calculate indices for loading into shared memory
+        int innerRowA = tid.x;
+        int innerColA = tid.y;
+        int innerRowB = tid.x;
+        int innerColB = tid.y;
+        
+        // Calculate global indices for loading from global memory
+        int globalRowA = globalRow;
+        int globalColA = bkIdx + innerColA;
+        int globalRowB = bkIdx + innerRowB;
+        int globalColB = globalCol + innerColB;
         
         // Load data into shared memory
-        if (tileStartK + tid.y < K) {
-            // Load from matrix A: row gid.x, column tileStartK + tid.y
-            // This ensures each thread in a threadgroup loads from the same row of A
-            As[tid.x][tid.y] = A[gid.x * K + (tileStartK + tid.y)];
-            
-            // Load from matrix B: row tileStartK + tid.x, column gid.y
-            // This ensures each thread in a threadgroup loads from the same column of B
-            Bs[tid.x][tid.y] = B[(tileStartK + tid.x) * N + gid.y];
+        if (globalColA < K) {
+            As[innerRowA][innerColA] = A[globalRowA * K + globalColA];
         } else {
-            // Pad with zeros if we're beyond the matrix dimensions
-            As[tid.x][tid.y] = 0.0f;
-            Bs[tid.x][tid.y] = 0.0f;
+            As[innerRowA][innerColA] = 0.0f;
+        }
+        
+        // Load from matrix B for each result this thread will compute
+        for (int r = 0; r < RESULTS_PER_THREAD; r++) {
+            if (globalRowB < K && (globalColB + r) < N) {
+                Bs[innerRowB][innerColB] = B[globalRowB * N + (globalColB + r)];
+            } else {
+                Bs[innerRowB][innerColB] = 0.0f;
+            }
         }
         
         // Synchronize threads to ensure shared memory is loaded
         threadgroup_barrier(mem_flags::mem_threadgroup);
         
-        // Compute partial dot product for this tile
-        // Each thread computes the dot product of its row from A and column from B
-        for (int i = 0; i < TILE_SIZE; i++) {
-            sum += As[tid.x][i] * Bs[i][tid.y];
+        // Calculate per-thread results
+        for (int dotIdx = 0; dotIdx < TILE_SIZE; ++dotIdx) {
+            // Cache the B value to reuse it for all results
+            float Btmp = Bs[dotIdx][tid.y];
+            
+            // Compute dot product for each result
+            for (int resIdx = 0; resIdx < RESULTS_PER_THREAD; ++resIdx) {
+                threadResults[resIdx] += As[tid.x][dotIdx] * Btmp;
+            }
         }
         
         // Synchronize threads before loading next tile
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     
-    // Write result back to global memory
-    result[gid.x * N + gid.y] = sum;
+    // Write results back to global memory
+    for (int r = 0; r < RESULTS_PER_THREAD; r++) {
+        int col = globalCol + r;
+        if (col < N) {
+            result[globalRow * N + col] = threadResults[r];
+        }
+    }
 }

@@ -108,7 +108,8 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
     // Calculate grid and threadgroup size
-    MTLSize gridSize = MTLSizeMake(_M, _N, 1);
+    // Adjust grid size to account for multiple results per thread
+    MTLSize gridSize = MTLSizeMake(_M, (_N + 3) / 4, 1); // Ceiling division by RESULTS_PER_THREAD (4)
     NSUInteger maxThreadsPerThreadgroup = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
     
     // Use a 16x16 threadgroup size for optimal memory coalescing
@@ -116,7 +117,7 @@ A class to manage all of the Metal objects this app creates.
     NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, 16 * 16); // 16x16 = 256 threads per group
     MTLSize threadgroupSize = MTLSizeMake(16, 16, 1); // Fixed 16x16 threadgroup size to match TILE_SIZE
     
-    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, _N, (int)threadgroupSize.width, (int)threadgroupSize.height);
+    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, (_N + 3) / 4, (int)threadgroupSize.width, (int)threadgroupSize.height);
     
     [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
     [computeEncoder endEncoding];
