@@ -108,14 +108,17 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
     // Define tile sizes
-    const int BM = 64;  // Block size for M dimension
-    const int BN = 64;  // Block size for N dimension
-    const int TM = 8;   // Number of results per thread
+    const int BM = 32;  // Block size for M dimension
+    const int BN = 32;  // Block size for N dimension
+    const int TM = 4;   // Number of results per thread in M dimension
+    const int TN = 4;   // Number of results per thread in N dimension
     
     // Calculate grid and threadgroup size
-    MTLSize gridSize = MTLSizeMake(((_N * _M)/TM), 1, 1);
+    // Grid size is the total number of threads needed
+    MTLSize gridSize = MTLSizeMake((_M * _N)/(TM * TN), 1, 1);
     
-    MTLSize threadgroupSize = MTLSizeMake((BM * BN) / TM, 1, 1);
+    // Threadgroup size is now (BM/TM) * (BN/TN)
+    MTLSize threadgroupSize = MTLSizeMake((BM/TM) * (BN/TN), 1, 1);
     
     NSLog(@"Grid size: %d, Threadgroup size: %d", (int)gridSize.width, (int)threadgroupSize.width);
     

@@ -12,10 +12,11 @@ A shader that multiplies two matrices using block tiling for better performance.
 using namespace metal;
 
 // Define tile sizes to match CUDA implementation
-constant int BM = 64;  // Block size for M dimension
-constant int BN = 64;  // Block size for N dimension
+constant int BM = 32;  // Block size for M dimension
+constant int BN = 32;  // Block size for N dimension
 constant int BK = 8;   // Block size for K dimension
-constant int TM = 8;   // Number of results per thread
+constant int TM = 4;   // Number of results per thread in M dimension
+constant int TN = 4;   // Number of results per thread in N dimension
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
 /// using shared memory for better performance with optimized memory coalescing.
@@ -44,95 +45,135 @@ kernel void add_arrays(device const float* A,
     const uint blockCol = col;  // Block column
     
     // Calculate thread indices within block
-    const uint threadRow = tid / BN;
-    const uint threadCol = tid % BN;
+    const uint threadRow = tid / (BN/TN);
+    const uint threadCol = tid % (BN/TN);
     
     // Create double-buffered shared memory tiles
     threadgroup float As[2][BM * BK];  // Double buffer for A
     threadgroup float Bs[2][BK * BN];  // Double buffer for B
     
     // Allocate thread-local cache for results
-    float threadResults[TM] = {0.0};
+    float threadResults[TM][TN] = {0.0};
     
-    // os_log_default.log_error("hello!!! tid: %d blockRow: %d blockCol: %d threadRow: %d threadCol: %d, gid: %d", tid, blockRow, blockCol, threadRow, threadCol, gid);
+    // Allocate register memory for blocking
+    float regM[TM];
+    float regN[TN];
     
     // Calculate the number of threads needed to load all elements
-    // (BM * BN)/TM = BM * BK = BK * BN
-    const uint numThreadsNeeded = (BM * BN)/TM;
+    // (BM * BN)/(TM * TN) = BK * BK
+    const uint numThreadsNeeded = (BM * BN)/(TM * TN);
     
     // Calculate which element this thread is responsible for loading
     const uint innerRowA = tid / BK;
     const uint innerColA = tid % BK;
-    const uint innerRowB = tid / BN;
-    const uint innerColB = tid % BN;
+    const uint innerRowB = tid / (BN);
+    const uint innerColB = tid % (BN);
+
+    const uint strideA = numThreadsNeeded / BK;
+    const uint strideB = numThreadsNeeded / BN;
+    // os_log_default.log_error("hello!!! tid: %d blockRow: %d blockCol: %d threadRow: %d threadCol: %d, gid: %d", tid, blockRow, blockCol, threadRow, threadCol, gid);
     
-    // Initialize buffers with first tile
+    // Current buffer being computed on (0 or 1)
+    uint currentBuffer = 0;
+    // Next buffer to load into (1 or 0)
+    uint nextBuffer = 1;
+    
+    // Load first tile
     if (tid < numThreadsNeeded) {
-        // Load one value from A into shared memory
-        if (innerRowA < BM && innerColA < K) {
-            As[0][innerRowA * BK + innerColA] = A[(blockRow * BM + innerRowA) * K + innerColA];
-        } else {
-            As[0][innerRowA * BK + innerColA] = 0.0f;
+        // Load values from A into shared memory with stride
+        for (uint loadOffset = 0; loadOffset < BM; loadOffset += strideA) {
+            if ((innerRowA + loadOffset) < BM && innerColA < K) {
+                As[currentBuffer][(innerRowA + loadOffset) * BK + innerColA] = 
+                    A[(blockRow * BM + innerRowA + loadOffset) * K + innerColA];
+            } else {
+                As[currentBuffer][(innerRowA + loadOffset) * BK + innerColA] = 0.0f;
+            }
         }
         
-        // Load one value from B into shared memory
-        if (innerRowB < K && innerColB < BN) {
-            Bs[0][innerRowB * BN + innerColB] = B[innerRowB * N + (blockCol * BN + innerColB)];
-        } else {
-            Bs[0][innerRowB * BN + innerColB] = 0.0f;
+        // Load values from B into shared memory with stride
+        for (uint loadOffset = 0; loadOffset < BK; loadOffset += strideB) {
+            if ((innerRowB + loadOffset) < K && innerColB < BN) {
+                Bs[currentBuffer][(innerRowB + loadOffset) * BN + innerColB] = 
+                    B[(innerRowB + loadOffset) * N + (blockCol * BN + innerColB)];
+            } else {
+                Bs[currentBuffer][(innerRowB + loadOffset) * BN + innerColB] = 0.0f;
+            }
         }
     }
     
-    // Synchronize threads before first computation
+    // // Synchronize threads for first load
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    
-    // Current buffer index (0 or 1)
-    uint currentBuffer = 0;
     
     // Loop over blocks in K dimension
     for (uint bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Next buffer index (alternates between 0 and 1)
-        uint nextBuffer = 1 - currentBuffer;
-        
-        // Start loading next tile while computing current tile
-        if (bkIdx + BK < K && tid < numThreadsNeeded) {
-            // Load one value from A into shared memory
-            if (innerRowA < BM && (bkIdx + BK + innerColA) < K) {
-                As[nextBuffer][innerRowA * BK + innerColA] = A[(blockRow * BM + innerRowA) * K + (bkIdx + BK + innerColA)];
-            } else {
-                As[nextBuffer][innerRowA * BK + innerColA] = 0.0f;
+
+        // Calculate per-thread results using register blocking for current tile
+        // Calculate per-thread results using register blocking for current tile
+        for (uint dotIdx = 0; dotIdx < BK; ++dotIdx) {
+            // Block into registers
+            for (uint i = 0; i < TM; ++i) {
+                regM[i] = As[currentBuffer][(threadRow * TM + i) * BK + dotIdx];
+            }
+            for (uint i = 0; i < TN; ++i) {
+                regN[i] = Bs[currentBuffer][dotIdx * BN + threadCol * TN + i];
             }
             
-            // Load one value from B into shared memory
-            if ((bkIdx + BK + innerRowB) < K && innerColB < BN) {
-                Bs[nextBuffer][innerRowB * BN + innerColB] = B[(bkIdx + BK + innerRowB) * N + (blockCol * BN + innerColB)];
-            } else {
-                Bs[nextBuffer][innerRowB * BN + innerColB] = 0.0f;
+            // Compute dot products using register values
+            for (uint resIdxM = 0; resIdxM < TM; ++resIdxM) {
+                for (uint resIdxN = 0; resIdxN < TN; ++resIdxN) {
+                    threadResults[resIdxM][resIdxN] += regM[resIdxM] * regN[resIdxN];
+                }
             }
         }
+
+
         
-        // Calculate per-thread results using current buffer
-        for (uint dotIdx = 0; dotIdx < BK; ++dotIdx) {
-            // We make the dot product loop the outside loop, which facilitates
-            // reuse of the Bs entry, which we can cache in a tmp var.
-            float tmpB = Bs[currentBuffer][dotIdx * BN + threadCol];
-            for (uint resIdx = 0; resIdx < TM; ++resIdx) {
-                threadResults[resIdx] += As[currentBuffer][(threadRow * TM + resIdx) * BK + dotIdx] * tmpB;
+        // Start loading next tile while computing current tile
+        if (tid < numThreadsNeeded && (bkIdx + BK) < K) {
+            // Load values from A into shared memory with stride
+            for (uint loadOffset = 0; loadOffset < BM; loadOffset += strideA) {
+                if ((innerRowA + loadOffset) < BM && (bkIdx + BK + innerColA) < K) {
+                    As[nextBuffer][(innerRowA + loadOffset) * BK + innerColA] = 
+                        A[(blockRow * BM + innerRowA + loadOffset) * K + (bkIdx + BK + innerColA)];
+                } else {
+                    As[nextBuffer][(innerRowA + loadOffset) * BK + innerColA] = 0.0f;
+                }
+            }
+            
+            // Load values from B into shared memory with stride
+            for (uint loadOffset = 0; loadOffset < BK; loadOffset += strideB) {
+                if ((bkIdx + BK + innerRowB + loadOffset) < K && innerColB < BN) {
+                    Bs[nextBuffer][(innerRowB + loadOffset) * BN + innerColB] = 
+                        B[(bkIdx + BK + innerRowB + loadOffset) * N + (blockCol * BN + innerColB)];
+                } else {
+                    Bs[nextBuffer][(innerRowB + loadOffset) * BN + innerColB] = 0.0f;
+                }
             }
         }
+
+        // threadgroup_barrier(mem_flags::mem_threadgroup);
+
         
-        // Synchronize before switching buffers
+        
+        // Swap buffers
+        currentBuffer = nextBuffer;
+        nextBuffer = 1 - nextBuffer;
+        
+        // Synchronize before next iteration
         threadgroup_barrier(mem_flags::mem_threadgroup);
         
-        // Switch to next buffer
-        currentBuffer = nextBuffer;
     }
     
     // Write results back to global memory
-    for (uint resIdx = 0; resIdx < TM; ++resIdx) {
-        uint effectiveThreadRow = threadRow * TM + resIdx;
-        if (effectiveThreadRow < BM && threadCol < BN) {
-            result[(blockRow * BM + effectiveThreadRow) * N + (blockCol * BN + threadCol)] = threadResults[resIdx];
+    for (uint resIdxM = 0; resIdxM < TM; ++resIdxM) {
+        for (uint resIdxN = 0; resIdxN < TN; ++resIdxN) {
+            uint effectiveThreadRow = threadRow * TM + resIdxM;
+            uint effectiveThreadCol = threadCol * TN + resIdxN;
+            
+            if (effectiveThreadRow < BM && effectiveThreadCol < BN) {
+                result[(blockRow * BM + effectiveThreadRow) * N + (blockCol * BN + effectiveThreadCol)] = 
+                    threadResults[resIdxM][resIdxN];
+            }
         }
     }
 }
