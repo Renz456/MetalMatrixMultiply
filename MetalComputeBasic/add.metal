@@ -12,10 +12,10 @@ A shader that multiplies two matrices using block tiling for better performance.
 using namespace metal;
 
 // Define tile sizes to match CUDA implementation
-constant int BM = 32;  // Block size for M dimension
-constant int BN = 32;  // Block size for N dimension
+constant int BM = 64;  // Block size for M dimension
+constant int BN = 64;  // Block size for N dimension
 constant int BK = 8;   // Block size for K dimension
-constant int TM = 4;   // Number of results per thread
+constant int TM = 8;   // Number of results per thread
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
 /// using shared memory for better performance with optimized memory coalescing.
@@ -47,9 +47,9 @@ kernel void add_arrays(device const float* A,
     const uint threadRow = tid / BN;
     const uint threadCol = tid % BN;
     
-    // Create shared memory tiles
-    threadgroup float As[BM * BK];
-    threadgroup float Bs[BK * BN];
+    // Create double-buffered shared memory tiles
+    threadgroup float As[2][BM * BK];  // Double buffer for A
+    threadgroup float Bs[2][BK * BN];  // Double buffer for B
     
     // Allocate thread-local cache for results
     float threadResults[TM] = {0.0};
@@ -66,40 +66,66 @@ kernel void add_arrays(device const float* A,
     const uint innerRowB = tid / BN;
     const uint innerColB = tid % BN;
     
+    // Initialize buffers with first tile
+    if (tid < numThreadsNeeded) {
+        // Load one value from A into shared memory
+        if (innerRowA < BM && innerColA < K) {
+            As[0][innerRowA * BK + innerColA] = A[(blockRow * BM + innerRowA) * K + innerColA];
+        } else {
+            As[0][innerRowA * BK + innerColA] = 0.0f;
+        }
+        
+        // Load one value from B into shared memory
+        if (innerRowB < K && innerColB < BN) {
+            Bs[0][innerRowB * BN + innerColB] = B[innerRowB * N + (blockCol * BN + innerColB)];
+        } else {
+            Bs[0][innerRowB * BN + innerColB] = 0.0f;
+        }
+    }
+    
+    // Synchronize threads before first computation
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    
+    // Current buffer index (0 or 1)
+    uint currentBuffer = 0;
+    
     // Loop over blocks in K dimension
     for (uint bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Populate the shared memory caches
-        if (tid < numThreadsNeeded) {
+        // Next buffer index (alternates between 0 and 1)
+        uint nextBuffer = 1 - currentBuffer;
+        
+        // Start loading next tile while computing current tile
+        if (bkIdx + BK < K && tid < numThreadsNeeded) {
             // Load one value from A into shared memory
-            if (innerRowA < BM && (bkIdx + innerColA) < K) {
-                As[innerRowA * BK + innerColA] = A[(blockRow * BM + innerRowA) * K + (bkIdx + innerColA)];
+            if (innerRowA < BM && (bkIdx + BK + innerColA) < K) {
+                As[nextBuffer][innerRowA * BK + innerColA] = A[(blockRow * BM + innerRowA) * K + (bkIdx + BK + innerColA)];
             } else {
-                As[innerRowA * BK + innerColA] = 0.0f;
+                As[nextBuffer][innerRowA * BK + innerColA] = 0.0f;
             }
             
             // Load one value from B into shared memory
-            if ((bkIdx + innerRowB) < K && innerColB < BN) {
-                Bs[innerRowB * BN + innerColB] = B[(bkIdx + innerRowB) * N + (blockCol * BN + innerColB)];
+            if ((bkIdx + BK + innerRowB) < K && innerColB < BN) {
+                Bs[nextBuffer][innerRowB * BN + innerColB] = B[(bkIdx + BK + innerRowB) * N + (blockCol * BN + innerColB)];
             } else {
-                Bs[innerRowB * BN + innerColB] = 0.0f;
+                Bs[nextBuffer][innerRowB * BN + innerColB] = 0.0f;
             }
         }
         
-        // Synchronize threads
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        
-        // Calculate per-thread results
+        // Calculate per-thread results using current buffer
         for (uint dotIdx = 0; dotIdx < BK; ++dotIdx) {
             // We make the dot product loop the outside loop, which facilitates
             // reuse of the Bs entry, which we can cache in a tmp var.
-            float tmpB = Bs[dotIdx * BN + threadCol];
+            float tmpB = Bs[currentBuffer][dotIdx * BN + threadCol];
             for (uint resIdx = 0; resIdx < TM; ++resIdx) {
-                threadResults[resIdx] += As[(threadRow * TM + resIdx) * BK + dotIdx] * tmpB;
+                threadResults[resIdx] += As[currentBuffer][(threadRow * TM + resIdx) * BK + dotIdx] * tmpB;
             }
         }
         
-        // Synchronize before loading next tile
+        // Synchronize before switching buffers
         threadgroup_barrier(mem_flags::mem_threadgroup);
+        
+        // Switch to next buffer
+        currentBuffer = nextBuffer;
     }
     
     // Write results back to global memory

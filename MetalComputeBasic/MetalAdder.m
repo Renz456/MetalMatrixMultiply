@@ -108,9 +108,9 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
     // Define tile sizes
-    const int BM = 32;  // Block size for M dimension
-    const int BN = 32;  // Block size for N dimension
-    const int TM = 4;   // Number of results per thread
+    const int BM = 64;  // Block size for M dimension
+    const int BN = 64;  // Block size for N dimension
+    const int TM = 8;   // Number of results per thread
     
     // Calculate grid and threadgroup size
     MTLSize gridSize = MTLSizeMake(((_N * _M)/TM), 1, 1);
