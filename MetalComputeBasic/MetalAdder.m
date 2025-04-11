@@ -108,16 +108,16 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferN offset:0 atIndex:4];
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
-    // Define block size (must match the constant in the shader)
-    const int BLOCKSIZE = 2;
+    // Calculate grid and threadgroup size
+    MTLSize gridSize = MTLSizeMake(_M, _N, 1);
+    NSUInteger maxThreadsPerThreadgroup = _mAddFunctionPSO.maxTotalThreadsPerThreadgroup;
     
-    // Calculate grid size (total number of threads needed)
-    MTLSize gridSize = MTLSizeMake(_M * _N, 1, 1);
+    // Use a 16x16 threadgroup size for optimal memory coalescing
+    // This ensures each thread in a threadgroup works on the same row of A
+    NSUInteger threadsPerThreadgroup = MIN(maxThreadsPerThreadgroup, 16 * 16); // 16x16 = 256 threads per group
+    MTLSize threadgroupSize = MTLSizeMake(16, 16, 1); // Fixed 16x16 threadgroup size to match TILE_SIZE
     
-    // Threadgroup size is BLOCKSIZE * BLOCKSIZE
-    MTLSize threadgroupSize = MTLSizeMake(BLOCKSIZE * BLOCKSIZE, 1, 1);
-    
-    NSLog(@"Grid size: %d, Threadgroup size: %d", (int)gridSize.width, (int)threadgroupSize.width);
+    NSLog(@"Grid size: %dx%d, Threadgroup size: %dx%d", _M, _N, (int)threadgroupSize.width, (int)threadgroupSize.height);
     
     [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
     [computeEncoder endEncoding];
@@ -130,7 +130,7 @@ A class to manage all of the Metal objects this app creates.
     
     // End timing and calculate duration
     NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
-    NSLog(@"Blocked GPU computation took %.4f seconds", timeElapsed);
+    NSLog(@"GPU computation took %.4f seconds", timeElapsed);
     
     [self verifyResults];
 }
@@ -173,6 +173,7 @@ A class to manage all of the Metal objects this app creates.
         NSLog(@"Verification failed - %d errors found", verificationErrors);
     }
 }
+
 
 - (void)runMPSMatrixMultiplication {
     // Create MPS matrices from our buffers
