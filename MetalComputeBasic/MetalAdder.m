@@ -108,11 +108,14 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferN offset:0 atIndex:4];
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
-    // For naive implementation, we need one thread per element in the result matrix
+    // Define block size (must match the constant in the shader)
+    const int BLOCKSIZE = 2;
+    
+    // Calculate grid size (total number of threads needed)
     MTLSize gridSize = MTLSizeMake(_M * _N, 1, 1);
     
-    // Use a reasonable threadgroup size (e.g., 256 threads per threadgroup)
-    MTLSize threadgroupSize = MTLSizeMake(256, 1, 1);
+    // Threadgroup size is BLOCKSIZE * BLOCKSIZE
+    MTLSize threadgroupSize = MTLSizeMake(BLOCKSIZE * BLOCKSIZE, 1, 1);
     
     NSLog(@"Grid size: %d, Threadgroup size: %d", (int)gridSize.width, (int)threadgroupSize.width);
     
@@ -127,7 +130,7 @@ A class to manage all of the Metal objects this app creates.
     
     // End timing and calculate duration
     NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
-    NSLog(@"Naive GPU computation took %.4f seconds", timeElapsed);
+    NSLog(@"Blocked GPU computation took %.4f seconds", timeElapsed);
     
     [self verifyResults];
 }

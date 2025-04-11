@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithDevice:(id<MTLDevice>)device;
 - (void)prepareDataWithSizeM:(int)M sizeN:(int)N sizeK:(int)K;
 - (void)sendComputeCommand;
+- (void)runMPSMatrixMultiplication;
 @end
 
 NS_ASSUME_NONNULL_END

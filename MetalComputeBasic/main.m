@@ -52,10 +52,15 @@ int main(int argc, const char * argv[]) {
         // Create buffers to hold data
         [adder prepareDataWithSizeM:M sizeN:N sizeK:K];
         
+        NSLog(@"Running custom matrix multiplication implementation...");
         // Send a command to the GPU to perform the calculation.
         [adder sendComputeCommand];
         
-        NSLog(@"Matrix multiplication completed");
+        NSLog(@"Running Apple's optimized MPS matrix multiplication...");
+        // Run Apple's optimized implementation
+        [adder runMPSMatrixMultiplication];
+        
+        NSLog(@"Matrix multiplication comparisons completed");
     }
     return 0;
 }
