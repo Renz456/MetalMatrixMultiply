@@ -6,6 +6,7 @@ A class to manage all of the Metal objects this app creates.
 */
 
 #import "MetalAdder.h"
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 @implementation MetalAdder {
     id<MTLDevice> _mDevice;
@@ -107,18 +108,11 @@ A class to manage all of the Metal objects this app creates.
     [computeEncoder setBuffer:_mBufferN offset:0 atIndex:4];
     [computeEncoder setBuffer:_mBufferK offset:0 atIndex:5];
     
-    // Define tile sizes
-    const int BM = 32;  // Block size for M dimension
-    const int BN = 32;  // Block size for N dimension
-    const int TM = 4;   // Number of results per thread in M dimension
-    const int TN = 4;   // Number of results per thread in N dimension
+    // For naive implementation, we need one thread per element in the result matrix
+    MTLSize gridSize = MTLSizeMake(_M * _N, 1, 1);
     
-    // Calculate grid and threadgroup size
-    // Grid size is the total number of threads needed
-    MTLSize gridSize = MTLSizeMake((_M * _N)/(TM * TN), 1, 1);
-    
-    // Threadgroup size is now (BM/TM) * (BN/TN)
-    MTLSize threadgroupSize = MTLSizeMake((BM/TM) * (BN/TN), 1, 1);
+    // Use a reasonable threadgroup size (e.g., 256 threads per threadgroup)
+    MTLSize threadgroupSize = MTLSizeMake(256, 1, 1);
     
     NSLog(@"Grid size: %d, Threadgroup size: %d", (int)gridSize.width, (int)threadgroupSize.width);
     
@@ -133,7 +127,7 @@ A class to manage all of the Metal objects this app creates.
     
     // End timing and calculate duration
     NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
-    NSLog(@"GPU computation took %.4f seconds", timeElapsed);
+    NSLog(@"Naive GPU computation took %.4f seconds", timeElapsed);
     
     [self verifyResults];
 }
@@ -175,6 +169,58 @@ A class to manage all of the Metal objects this app creates.
     } else {
         NSLog(@"Verification failed - %d errors found", verificationErrors);
     }
+}
+
+- (void)runMPSMatrixMultiplication {
+    // Create MPS matrices from our buffers
+    MPSMatrixDescriptor *matrixADesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_M
+                                                                          columns:_K
+                                                                         rowBytes:_K * sizeof(float)
+                                                                         dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *matrixBDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_K
+                                                                          columns:_N
+                                                                         rowBytes:_N * sizeof(float)
+                                                                         dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *matrixCDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:_M
+                                                                          columns:_N
+                                                                         rowBytes:_N * sizeof(float)
+                                                                         dataType:MPSDataTypeFloat32];
+    
+    MPSMatrix *matrixA = [[MPSMatrix alloc] initWithBuffer:_mBufferA descriptor:matrixADesc];
+    MPSMatrix *matrixB = [[MPSMatrix alloc] initWithBuffer:_mBufferB descriptor:matrixBDesc];
+    MPSMatrix *matrixC = [[MPSMatrix alloc] initWithBuffer:_mBufferResult descriptor:matrixCDesc];
+    
+    // Create the matrix multiplication kernel
+    MPSMatrixMultiplication *matrixMultiplication = [[MPSMatrixMultiplication alloc] initWithDevice:_mDevice
+                                                                                     transposeLeft:NO
+                                                                                    transposeRight:NO
+                                                                                    resultRows:_M
+                                                                                 resultColumns:_N
+                                                                                  interiorColumns:_K
+                                                                                         alpha:1.0
+                                                                                          beta:0.0];
+    
+    // Create a command buffer
+    id<MTLCommandBuffer> commandBuffer = [_mCommandQueue commandBuffer];
+    
+    // Start timing
+    NSDate *startTime = [NSDate date];
+    
+    // Encode the matrix multiplication
+    [matrixMultiplication encodeToCommandBuffer:commandBuffer
+                                    leftMatrix:matrixA
+                                   rightMatrix:matrixB
+                                  resultMatrix:matrixC];
+    
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    
+    // End timing and calculate duration
+    NSTimeInterval timeElapsed = [[NSDate date] timeIntervalSinceDate:startTime];
+    NSLog(@"MPS Matrix Multiplication took %.4f seconds", timeElapsed);
+    
+    // Verify results
+    [self verifyResults];
 }
 
 @end
