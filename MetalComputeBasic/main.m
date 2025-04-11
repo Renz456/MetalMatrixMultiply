@@ -45,9 +45,9 @@ int main(int argc, const char * argv[]) {
         }
         
         // Set matrix dimensions (M x K) * (K x N) = (M x N)
-        const int M = 4096;  // rows of A
-        const int K = 4096;  // cols of A, rows of B
-        const int N = 4096;  // cols of B
+        const int M = 4;  // rows of A
+        const int K = 4;  // cols of A, rows of B
+        const int N = 4;  // cols of B
         
         // Create buffers to hold data
         [adder prepareDataWithSizeM:M sizeN:N sizeK:K];
