@@ -12,10 +12,10 @@ A shader that multiplies two matrices using block tiling for better performance.
 using namespace metal;
 
 // Define tile sizes to match CUDA implementation
-constant int BM = 2;  // Block size for M dimension
-constant int BN = 2;  // Block size for N dimension
-constant int BK = 1;   // Block size for K dimension
-constant int TM = 2;   // Number of results per thread
+constant int BM = 32;  // Block size for M dimension
+constant int BN = 32;  // Block size for N dimension
+constant int BK = 8;   // Block size for K dimension
+constant int TM = 4;   // Number of results per thread
 
 /// This is a Metal Shading Language (MSL) function that performs matrix multiplication on a GPU
 /// using shared memory for better performance with optimized memory coalescing.
@@ -54,7 +54,7 @@ kernel void add_arrays(device const float* A,
     // Allocate thread-local cache for results
     float threadResults[TM] = {0.0};
     
-    os_log_default.log_error("hello!!! tid: %d blockRow: %d blockCol: %d threadRow: %d threadCol: %d, gid: %d", tid, blockRow, blockCol, threadRow, threadCol, gid);
+    // os_log_default.log_error("hello!!! tid: %d blockRow: %d blockCol: %d threadRow: %d threadCol: %d, gid: %d", tid, blockRow, blockCol, threadRow, threadCol, gid);
     
     // Calculate the number of threads needed to load all elements
     // (BM * BN)/TM = BM * BK = BK * BN
